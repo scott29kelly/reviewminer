@@ -1,0 +1,77 @@
+# Review Miner Configuration
+
+# API Configuration
+anthropic:
+  model: "claude-sonnet-4-5-20250929"
+  max_tokens: 4096
+  batch_size: 20  # Reviews per API call
+  max_retries: 3  # Retry attempts for API calls
+  retry_min_wait: 2.0  # Minimum wait between retries (seconds)
+  retry_max_wait: 30.0  # Maximum wait between retries (seconds)
+
+# Scraping Settings
+scraping:
+  default_max_reviews: 100
+  default_max_products: 10
+  request_timeout: 30.0  # HTTP request timeout (seconds)
+  max_retries: 3  # Retry attempts for failed requests
+  retry_min_wait: 2.0  # Minimum wait between retries (seconds)
+  retry_max_wait: 10.0  # Maximum wait between retries (seconds)
+  
+  amazon:
+    enabled: true
+    delay_min: 3
+    delay_max: 7
+    delay_between_products: 45
+    user_agents:
+      - "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+      - "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+      - "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0"
+  
+  goodreads:
+    enabled: true
+    delay_min: 2
+    delay_max: 4
+  
+  reddit:
+    enabled: true
+    subreddits:
+      - books
+      - suggestmeabook
+      - selfimprovement
+      - productivity
+      - getdisciplined
+    pain_keywords:
+      - disappointed
+      - waste of time
+      - overrated
+      - didn't help
+      - not worth
+      - struggled with
+      - couldn't finish
+      - expected more
+      - misleading
+  
+  librarything:
+    enabled: true
+    delay_min: 2
+    delay_max: 5
+
+# Review Filtering
+filtering:
+  min_review_length: 50  # Characters
+  max_review_length: 10000
+  star_ratings: [1, 2, 3]  # Only scrape these ratings
+  exclude_keywords:
+    - "I received this product for free"
+    - "sponsored"
+
+# Output Settings
+output:
+  default_format: "markdown"
+  include_raw_reviews: false
+  group_by_category: true
+
+# Database
+database:
+  path: "data/review_miner.db"

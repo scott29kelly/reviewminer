@@ -1,0 +1,23 @@
+[
+  {
+    "source": "test",
+    "product_title": "Deep Work by Cal Newport",
+    "rating": 2,
+    "review_text": "I was really excited about this book based on the reviews, but I found it incredibly disappointing. The first half is just Newport bragging about his academic achievements. When he finally gets to the 'how-to' section, it's incredibly vague. 'Schedule deep work blocks' - okay, but HOW do I protect that time when my boss expects instant responses? He clearly has never worked in a normal office environment. The examples are all professors and writers who have complete control over their schedules. Useless for anyone in a corporate job.",
+    "review_date": "2024-06-15"
+  },
+  {
+    "source": "test",
+    "product_title": "Atomic Habits by James Clear",
+    "rating": 2,
+    "review_text": "This could have been a blog post. The core ideas (habit stacking, 1% improvements, environment design) are solid but they're buried under endless repetitive stories and padding. I kept waiting for deeper insights that never came. If you've read any other habit book or even just browsed productivity Reddit, you won't find anything new here. Also frustrating that he barely addresses how to break BAD habits - it's 90% about building new ones.",
+    "review_date": "2024-08-22"
+  },
+  {
+    "source": "test",
+    "product_title": "The 4-Hour Work Week by Tim Ferriss",
+    "rating": 1,
+    "review_text": "Outdated garbage. Half the 'hacks' don't work anymore (virtual assistants, arbitrage businesses, etc). The whole premise assumes you already have a successful business or can easily start one. What about people with actual jobs and responsibilities? The arrogance is off the charts. This is lifestyle porn for people who want to fantasize about escaping their lives, not a practical guide for anyone living in reality.",
+    "review_date": "2024-03-10"
+  }
+]
