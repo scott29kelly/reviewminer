@@ -293,3 +293,66 @@ class LibraryThingScraper(BaseScraper):
             return date_elem.get_text(strip=True)
         
         return None
+    
+    def scrape_work_reviews(
+        self,
+        query: str,
+        max_reviews: int = 100,
+        max_works: int = 10,
+    ) -> List[Review]:
+        """Search for works by topic and scrape reviews from multiple works.
+        
+        This is a synchronous wrapper for topic-based scraping.
+        """
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return loop.run_until_complete(
+                self._scrape_work_reviews_async(query, max_reviews, max_works)
+            )
+        finally:
+            loop.close()
+    
+    async def _scrape_work_reviews_async(
+        self,
+        query: str,
+        max_reviews: int = 100,
+        max_works: int = 10,
+    ) -> List[Review]:
+        """Search for works by topic and scrape reviews from multiple works."""
+        logger.info("Starting topic-based scrape for: %s", query)
+        
+        # Search for works matching the topic
+        work_urls = await self.search(query, max_works)
+        
+        if not work_urls:
+            logger.warning("No works found for query: %s", query)
+            return []
+        
+        all_reviews = []
+        reviews_per_work = max(1, max_reviews // len(work_urls))
+        
+        for i, url in enumerate(work_urls, 1):
+            if len(all_reviews) >= max_reviews:
+                break
+            
+            logger.info("Scraping work %d/%d: %s", i, len(work_urls), url[:80])
+            
+            try:
+                reviews = await self.scrape_reviews(
+                    url,
+                    max_reviews=reviews_per_work,
+                )
+                all_reviews.extend(reviews)
+                logger.info("Got %d reviews from work %d", len(reviews), i)
+                
+                # Delay between works
+                if i < len(work_urls):
+                    await asyncio.sleep(await self._get_delay() * 2)
+                    
+            except Exception as e:
+                logger.warning("Failed to scrape work %s: %s", url, e)
+                continue
+        
+        logger.info("Total reviews scraped: %d", len(all_reviews[:max_reviews]))
+        return all_reviews[:max_reviews]

@@ -1,8 +1,10 @@
-"""Reddit scraper using PRAW (Python Reddit API Wrapper)."""
+"""Reddit scraper - supports both PRAW (with API key) and public JSON (no auth)."""
 
 import asyncio
 from typing import List, Optional
+from datetime import datetime
 
+import httpx
 from tenacity import (
     retry,
     retry_if_exception_type,
@@ -18,6 +20,10 @@ from src.scrapers.base import BaseScraper
 
 
 logger = get_logger(__name__)
+
+
+# Rate limiting for public JSON API
+JSON_API_DELAY = 2.0  # Reddit wants 1 request per 2 seconds without auth
 
 
 # Pain keywords to search for in discussions
@@ -38,42 +44,147 @@ PAIN_KEYWORDS = [
 
 
 class RedditScraper(BaseScraper):
-    """Scrape reviews and discussions from Reddit using PRAW."""
+    """Scrape reviews and discussions from Reddit.
+    
+    Supports two modes:
+    1. PRAW mode (with API credentials) - higher rate limits
+    2. JSON mode (no auth required) - uses public .json endpoints
+    """
     
     source_name = "reddit"
     
     def __init__(self):
         self.config = get_config()
         self._reddit = None
+        self._use_json_api = False
+        self._http_client = None
         logger.debug("Initialized RedditScraper")
     
     @property
+    def http_client(self) -> httpx.AsyncClient:
+        """Lazy-load async HTTP client for JSON API."""
+        if self._http_client is None:
+            self._http_client = httpx.AsyncClient(
+                headers={
+                    "User-Agent": self.config.reddit_user_agent or "ReviewMiner/1.0 (Educational Project)",
+                },
+                timeout=30.0,
+                follow_redirects=True,
+            )
+        return self._http_client
+    
+    @property
     def reddit(self):
-        """Lazy-load Reddit client."""
+        """Lazy-load Reddit client. Falls back to JSON API if no credentials."""
         if self._reddit is None:
+            client_id = self.config.reddit_client_id
+            client_secret = self.config.reddit_client_secret
+            
+            # If no credentials, use JSON API instead
+            if not client_id or not client_secret:
+                logger.info("No Reddit API credentials found - using public JSON API (no auth required)")
+                self._use_json_api = True
+                return None
+            
             try:
                 import praw
                 import prawcore
             except ImportError:
-                raise ImportError("PRAW is required for Reddit scraping. Install with: pip install praw")
+                logger.warning("PRAW not installed - falling back to JSON API")
+                self._use_json_api = True
+                return None
             
-            client_id = self.config.reddit_client_id
-            client_secret = self.config.reddit_client_secret
             user_agent = self.config.reddit_user_agent
             
-            if not client_id or not client_secret:
-                raise ConfigError(
-                    "Reddit API credentials required. "
-                    "Set REDDIT_CLIENT_ID and REDDIT_CLIENT_SECRET in your .env file."
-                )
-            
-            logger.debug("Initializing Reddit client")
+            logger.debug("Initializing Reddit client with PRAW")
             self._reddit = praw.Reddit(
                 client_id=client_id,
                 client_secret=client_secret,
                 user_agent=user_agent,
             )
         return self._reddit
+    
+    async def _json_search(
+        self,
+        query: str,
+        subreddit: str = "all",
+        limit: int = 25,
+    ) -> List[dict]:
+        """Search Reddit using public JSON API (no auth required)."""
+        url = f"https://www.reddit.com/r/{subreddit}/search.json"
+        params = {
+            "q": query,
+            "limit": min(limit, 100),  # Reddit caps at 100
+            "sort": "relevance",
+            "restrict_sr": "on" if subreddit != "all" else "off",
+            "type": "link",
+        }
+        
+        try:
+            await asyncio.sleep(JSON_API_DELAY)  # Rate limit
+            response = await self.http_client.get(url, params=params)
+            response.raise_for_status()
+            data = response.json()
+            
+            posts = []
+            for child in data.get("data", {}).get("children", []):
+                posts.append(child.get("data", {}))
+            
+            logger.debug("JSON API search returned %d posts", len(posts))
+            return posts
+            
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 429:
+                logger.warning("Rate limited by Reddit - waiting 60s")
+                await asyncio.sleep(60)
+                return await self._json_search(query, subreddit, limit)
+            logger.error("Reddit JSON API error: %s", e)
+            return []
+        except Exception as e:
+            logger.error("Reddit JSON API request failed: %s", e)
+            return []
+    
+    async def _json_get_comments(self, post_id: str) -> List[dict]:
+        """Get comments for a post using JSON API."""
+        url = f"https://www.reddit.com/comments/{post_id}.json"
+        
+        try:
+            await asyncio.sleep(JSON_API_DELAY)  # Rate limit
+            response = await self.http_client.get(url)
+            response.raise_for_status()
+            data = response.json()
+            
+            comments = []
+            if len(data) > 1:
+                self._extract_comments_recursive(data[1].get("data", {}).get("children", []), comments)
+            
+            logger.debug("JSON API returned %d comments for post %s", len(comments), post_id)
+            return comments
+            
+        except Exception as e:
+            logger.error("Failed to get comments for %s: %s", post_id, e)
+            return []
+    
+    def _extract_comments_recursive(self, children: list, comments: list, max_depth: int = 3, depth: int = 0):
+        """Recursively extract comments from Reddit JSON structure."""
+        if depth >= max_depth:
+            return
+            
+        for child in children:
+            if child.get("kind") != "t1":  # t1 = comment
+                continue
+            
+            data = child.get("data", {})
+            body = data.get("body", "")
+            
+            if body and body not in ("[deleted]", "[removed]") and len(body) >= 50:
+                comments.append(data)
+            
+            # Recurse into replies
+            replies = data.get("replies")
+            if isinstance(replies, dict):
+                reply_children = replies.get("data", {}).get("children", [])
+                self._extract_comments_recursive(reply_children, comments, max_depth, depth + 1)
     
     def _get_prawcore_exceptions(self):
         """Get prawcore exception types for retry logic."""
@@ -151,6 +262,101 @@ class RedditScraper(BaseScraper):
         
         pain_keywords = self.config.config.scraping.reddit.pain_keywords
         
+        # Check if we should use JSON API (no auth) or PRAW
+        _ = self.reddit  # Trigger lazy init to set _use_json_api flag
+        
+        if self._use_json_api:
+            return await self._search_and_scrape_json(query, subreddits, max_posts, pain_keywords)
+        else:
+            return await self._search_and_scrape_praw(query, subreddits, max_posts, pain_keywords)
+    
+    async def _search_and_scrape_json(
+        self,
+        query: str,
+        subreddits: List[str],
+        max_posts: int,
+        pain_keywords: List[str],
+    ) -> List[Review]:
+        """Search and scrape using public JSON API (no auth required)."""
+        logger.info("Using JSON API mode (no authentication)")
+        
+        all_reviews = []
+        seen_ids = set()
+        
+        # Build search queries
+        search_queries = [query]
+        for keyword in pain_keywords[:2]:  # Limit queries due to rate limiting
+            search_queries.append(f"{query} {keyword}")
+        
+        subreddit_str = "+".join(subreddits) if subreddits else "all"
+        
+        for search_query in search_queries:
+            logger.debug("JSON search: %s in r/%s", search_query, subreddit_str)
+            
+            posts = await self._json_search(
+                query=search_query,
+                subreddit=subreddit_str,
+                limit=max_posts // len(search_queries),
+            )
+            
+            for post in posts:
+                post_id = post.get("id")
+                if not post_id or post_id in seen_ids:
+                    continue
+                seen_ids.add(post_id)
+                
+                # Extract from post body
+                selftext = post.get("selftext", "")
+                if selftext and selftext not in ("[deleted]", "[removed]") and len(selftext) >= 50:
+                    all_reviews.append(Review(
+                        source=self.source_name,
+                        source_url=f"https://reddit.com{post.get('permalink', '')}",
+                        product_title=post.get("title", ""),
+                        author=post.get("author"),
+                        rating=None,
+                        review_text=selftext,
+                        review_date=self._parse_utc_timestamp(post.get("created_utc")),
+                    ))
+                
+                # Get comments
+                comments = await self._json_get_comments(post_id)
+                for comment in comments[:30]:  # Limit comments per post
+                    author = comment.get("author", "")
+                    if author.lower() in ("automoderator", "[deleted]"):
+                        continue
+                    
+                    all_reviews.append(Review(
+                        source=self.source_name,
+                        source_url=f"https://reddit.com{comment.get('permalink', '')}",
+                        product_title=post.get("title", ""),
+                        author=author,
+                        rating=None,
+                        review_text=comment.get("body", ""),
+                        review_date=self._parse_utc_timestamp(comment.get("created_utc")),
+                    ))
+        
+        logger.info("JSON API collected %d reviews", len(all_reviews))
+        return all_reviews
+    
+    def _parse_utc_timestamp(self, timestamp) -> Optional[datetime]:
+        """Convert Reddit UTC timestamp to datetime."""
+        if timestamp:
+            try:
+                return datetime.fromtimestamp(float(timestamp))
+            except (ValueError, TypeError):
+                pass
+        return None
+    
+    async def _search_and_scrape_praw(
+        self,
+        query: str,
+        subreddits: List[str],
+        max_posts: int,
+        pain_keywords: List[str],
+    ) -> List[Review]:
+        """Search and scrape using PRAW (requires API credentials)."""
+        logger.info("Using PRAW mode (authenticated)")
+        
         all_reviews = []
         subreddit_str = "+".join(subreddits)
         logger.debug("Searching in subreddits: %s", subreddit_str)
@@ -191,6 +397,12 @@ class RedditScraper(BaseScraper):
         
         logger.info("Total reviews collected: %d", len(all_reviews))
         return all_reviews
+    
+    async def close(self):
+        """Clean up resources."""
+        if self._http_client:
+            await self._http_client.aclose()
+            self._http_client = None
     
     def _extract_reviews_from_submission(
         self,

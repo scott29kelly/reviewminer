@@ -286,6 +286,22 @@ class AmazonScraper(BaseScraper):
         logger.info("Scraped %d reviews total", len(reviews))
         return reviews
     
+    def search_and_scrape(
+        self,
+        query: str,
+        max_products: int = 10,
+        max_reviews_per_product: int = 50,
+    ) -> List[Review]:
+        """Search for books by topic and scrape reviews. Synchronous wrapper."""
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return loop.run_until_complete(
+                self.scrape_from_search(query, max_products, max_reviews_per_product)
+            )
+        finally:
+            loop.close()
+    
     async def scrape_from_search(
         self,
         query: str,
